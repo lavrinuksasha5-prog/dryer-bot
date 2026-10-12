@@ -1,0 +1,126 @@
+import asyncio
+import random
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.memory import MemoryStorage
+
+API_TOKEN = '8927020339:AAFRHljsv2i3ZiK453wG3lQ-Mn3XW1bbuL4'
+
+bot = Bot(token=API_TOKEN)
+storage = MemoryStorage()
+dp = Dispatcher(storage=storage)
+
+class CheckInState(StatesGroup):
+    waiting_for_water = State()
+    waiting_for_cheat = State()
+    waiting_for_energy = State()
+
+BREAKFASTS = [
+    "🍳 Омлет из 5 белков + 1 целое яйцо со шпинатом (без соли!). Кофе/чай без сахара.",
+    "🥣 Пачка мягкого обезжиренного творога (0-2%) + 30г ягод. Чай/кофе без сахара.",
+    "🍳 4 вареных белка + 1 целое яйцо + 1 огурец."
+]
+
+LUNCHES = [
+    "🍗 250г отварной куриной грудки + свежий огурец и листовой салат (без соусов!).",
+    "🦃 250г индейки на пару + брокколи/стручковая фасоль (без соли).",
+]
+
+DINNERS = [
+    "🐟 250г филе минтая/трески на пару + свежие огурцы.",
+    "🦐 250г отварных креветок без соли + салат из капусты и зелени."
+]
+
+main_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🥗 Меню на день"), KeyboardButton(text="📊 Пройти вечерний чекин")],
+        [KeyboardButton(text="💧 Норма воды"), KeyboardButton(text="🚫 Что в бане?")]
+    ],
+    resize_keyboard=True
+)
+
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    await message.answer(
+        "💪 **Личный бот-тренер по экспресс-сушке запущен.**\n\n"
+        "Я буду выдавать меню и жестко контролировать твой прогресс. Нажми «Пройти вечерний чекин», когда придет время отчета!",
+        reply_markup=main_kb,
+        parse_mode="Markdown"
+    )
+
+@dp.message(F.text == "🥗 Меню на день")
+async def get_menu(message: types.Message):
+    text = (
+        "🔥 **МЕНЮ НА СЕГОДНЯ** 🔥\n\n"
+        f"**🥞 Завтрак:**\n{random.choice(BREAKFASTS)}\n\n"
+        f"**🥩 Обед:**\n{random.choice(LUNCHES)}\n\n"
+        f"**🌙 Ужин:**\n{random.choice(DINNERS)}\n\n"
+        "⚠️ *Без соли, сахара и соусов!* Жёстко держим курс."
+    )
+    await message.answer(text, parse_mode="Markdown")
+
+@dp.message(F.text == "💧 Норма воды")
+async def get_water(message: types.Message):
+    await message.answer("💧 **Цель на сегодня:** выпить 3.5 – 4 литра воды мелкими глотками. Сливаем воду и отеки!")
+
+@dp.message(F.text == "🚫 Что в бане?")
+async def get_stop_list(message: types.Message):
+    await message.answer("🚫 **Тотальный бан:** Соль, сахар, газировки, соусы, мучное, алкоголь, молочка.")
+
+@dp.message(F.text == "📊 Пройти вечерний чекин")
+async def start_checkin(message: types.Message, state: FSMContext):
+    await state.set_state(CheckInState.waiting_for_water)
+    await message.answer(
+        "📋 **Ежевечерний отчет тренера**\n\n"
+        "Вопрос 1 из 3: Сколько литров чистой воды тебе удалось выпить за сегодня?"
+    )
+
+@dp.message(CheckInState.waiting_for_water)
+async def process_water(message: types.Message, state: FSMContext):
+    await state.update_data(water=message.text)
+    await state.set_state(CheckInState.waiting_for_cheat)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Нет, шел строго по плану", callback_data="cheat_no")],
+        [InlineKeyboardButton(text="❌ Было дело (нарушил)", callback_data="cheat_yes")]
+    ])
+    await message.answer("Вопрос 2 из 3: Были ли срывы? Съел ли что-то лишнее (соль, сахар, сладкое)?", reply_markup=kb)
+
+@dp.callback_query(CheckInState.waiting_for_cheat, F.data.startswith("cheat_"))
+async def process_cheat(callback: types.CallbackQuery, state: FSMContext):
+    cheat_status = "Строго по плану 🔥" if callback.data == "cheat_no" else "Было нарушение ⚠️"
+    await state.update_data(cheat=cheat_status)
+    await state.set_state(CheckInState.waiting_for_energy)
+    
+    await callback.message.edit_text("Вопрос 3 из 3: Как самочувствие и энергия от 1 до 10?")
+    await callback.answer()
+
+@dp.message(CheckInState.waiting_for_energy)
+async def process_energy(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    water = data.get("water")
+    cheat = data.get("cheat")
+    energy = message.text
+    
+    await state.clear()
+    
+    feedback = "Отличная работа, режим держится!" if "строго" in cheat else "Ну ты чего, соберись! Осталось немного, не порть результат."
+    
+    await message.answer(
+        "📊 **ИТОГИ ДНЯ:**\n\n"
+        f"💧 Вода: {water}\n"
+        f"🍔 Питание: {cheat}\n"
+        f"⚡ Энергия: {energy}/10\n\n"
+        f"🤖 **Вердикт тренера:** {feedback}",
+        reply_markup=main_kb,
+        parse_mode="Markdown"
+    )
+
+async def main():
+    await dp.start_polling(bot)
+
+if __name__ == '__main__':
+    asyncio.run(main())
